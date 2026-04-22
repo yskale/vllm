@@ -1,0 +1,4 @@
+kaniko-build-job.yaml
+*.env
+.env*
+secrets/
