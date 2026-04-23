@@ -113,7 +113,8 @@ old5 = (
 )
 new5 = (
     '    if hasattr(mm_embeddings, "last_hidden_state"):  # patched: Gemma 4 compat\n'
-    '        mm_embeddings = mm_embeddings.last_hidden_state\n'
+    '        hs = mm_embeddings.last_hidden_state  # shape: (total_tokens, D)\n'
+    '        mm_embeddings = list(hs.chunk(expected_num_items, dim=0))  # split into per-item 2D tensors\n'
     '    assert isinstance(mm_embeddings, (list, tuple, torch.Tensor)), (\n'
     '        "Expected multimodal embeddings to be a list/tuple of 2D tensors, "\n'
     '        f"or a single 3D tensor, but got {type(mm_embeddings)} "\n'
