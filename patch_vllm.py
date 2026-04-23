@@ -162,8 +162,19 @@ old6 = (
 )
 new6 = (
     '        if input_ids is None:\n'
-    '            # patched: avoid OOM from reverse embedding lookup (vLLM multimodal compat)\n'
-    '            input_ids = torch.zeros(inputs_embeds.shape[:2], dtype=torch.long, device=inputs_embeds.device)'
+    '            # patched: chunked argmax reverse embedding — avoids OOM from full (B,T,V,D) broadcast\n'
+    '            # Uses 512-token chunks: each matmul is (1, 512, 262144) ~512MB, then freed\n'
+    '            with torch.no_grad():\n'
+    '                scale = self.config.hidden_size ** 0.5\n'
+    '                B, T, D = inputs_embeds.shape\n'
+    '                weights = self.embed_tokens.weight  # (V, D)\n'
+    '                chunk_size = 512\n'
+    '                chunks = []\n'
+    '                for start in range(0, T, chunk_size):\n'
+    '                    chunk = inputs_embeds[:, start:start + chunk_size, :] / scale  # (B, chunk, D)\n'
+    '                    dots = torch.matmul(chunk, weights.T)  # (B, chunk, V)\n'
+    '                    chunks.append(torch.argmax(dots, dim=-1))  # (B, chunk)\n'
+    '                input_ids = torch.cat(chunks, dim=1)  # (B, T)'
 )
 
 if old6 in content:
