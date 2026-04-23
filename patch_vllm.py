@@ -162,19 +162,13 @@ old6 = (
 )
 new6 = (
     '        if input_ids is None:\n'
-    '            # patched: chunked argmax reverse embedding — avoids OOM from full (B,T,V,D) broadcast\n'
-    '            # Uses 512-token chunks: each matmul is (1, 512, 262144) ~512MB, then freed\n'
-    '            with torch.no_grad():\n'
-    '                scale = self.config.hidden_size ** 0.5\n'
-    '                B, T, D = inputs_embeds.shape\n'
-    '                weights = self.embed_tokens.weight  # (V, D)\n'
-    '                chunk_size = 512\n'
-    '                chunks = []\n'
-    '                for start in range(0, T, chunk_size):\n'
-    '                    chunk = inputs_embeds[:, start:start + chunk_size, :] / scale  # (B, chunk, D)\n'
-    '                    dots = torch.matmul(chunk, weights.T)  # (B, chunk, V)\n'
-    '                    chunks.append(torch.argmax(dots, dim=-1))  # (B, chunk)\n'
-    '                input_ids = torch.cat(chunks, dim=1)  # (B, T)'
+    '            # patched: return None so project_per_layer_inputs() uses context-only PLE.\n'
+    '            # When vLLM v1 pre-computes inputs_embeds and passes input_ids=None, there is no\n'
+    '            # reliable way to reverse-embed back to token IDs (262144-vocab hubness problem).\n'
+    '            # project_per_layer_inputs(inputs_embeds, None) is the explicitly supported fallback\n'
+    '            # for multimodal inputs where input_ids are unavailable — uses only the context\n'
+    '            # projection from inputs_embeds, skipping the token-identity embedding lookup.\n'
+    '            return None'
 )
 
 if old6 in content:
