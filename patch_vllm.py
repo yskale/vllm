@@ -96,4 +96,38 @@ else:
     print(f"[WARN] Pattern not found in {utils_file}", file=sys.stderr)
     sys.exit(1)
 
+# Patch 5: v1/worker/utils.py
+# Handle Gemma 4 multimodal encoder returning BaseModelOutputWithPast
+# instead of the expected list/tuple/tensor format — extract last_hidden_state
+utils_worker_file = "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/utils.py"
+
+with open(utils_worker_file) as f:
+    content = f.read()
+
+old5 = (
+    '    assert isinstance(mm_embeddings, (list, tuple, torch.Tensor)), (\n'
+    '        "Expected multimodal embeddings to be a list/tuple of 2D tensors, "\n'
+    '        f"or a single 3D tensor, but got {type(mm_embeddings)} "\n'
+    '        "instead. This is most likely due to incorrect implementation "\n'
+    '        "of the model\'s `get_multimodal_embeddings` method.")'
+)
+new5 = (
+    '    if hasattr(mm_embeddings, "last_hidden_state"):  # patched: Gemma 4 compat\n'
+    '        mm_embeddings = mm_embeddings.last_hidden_state\n'
+    '    assert isinstance(mm_embeddings, (list, tuple, torch.Tensor)), (\n'
+    '        "Expected multimodal embeddings to be a list/tuple of 2D tensors, "\n'
+    '        f"or a single 3D tensor, but got {type(mm_embeddings)} "\n'
+    '        "instead. This is most likely due to incorrect implementation "\n'
+    '        "of the model\'s `get_multimodal_embeddings` method.")'
+)
+
+if old5 in content:
+    content = content.replace(old5, new5)
+    with open(utils_worker_file, "w") as f:
+        f.write(content)
+    print(f"[OK] Patched {utils_worker_file}")
+else:
+    print(f"[WARN] Pattern not found in {utils_worker_file}", file=sys.stderr)
+    sys.exit(1)
+
 print("All patches applied successfully.")
