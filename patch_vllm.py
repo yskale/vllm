@@ -67,4 +67,33 @@ else:
     print(f"[WARN] Pattern not found in {tokenizer_file}", file=sys.stderr)
     sys.exit(1)
 
+# Patch 4: model_executor/models/utils.py
+# Skip unknown checkpoint weights (like audio_tower input_max quantization metadata)
+# instead of raising ValueError — matches PyTorch strict=False behavior
+utils_file = "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/utils.py"
+
+with open(utils_file) as f:
+    content = f.read()
+
+old4 = (
+    '                msg = (f"There is no module or parameter named \'{prefix}\' "\n'
+    '                       f"in {type(self.module).__name__}")\n'
+    '                raise ValueError(msg)'
+)
+new4 = (
+    '                msg = (f"There is no module or parameter named \'{prefix}\' "\n'
+    '                       f"in {type(self.module).__name__}")\n'
+    '                import sys as _sys; print(f"[WARN] Skipping unknown weight: {prefix}", file=_sys.stderr)  # patched: Gemma 4 compat\n'
+    '                continue'
+)
+
+if old4 in content:
+    content = content.replace(old4, new4)
+    with open(utils_file, "w") as f:
+        f.write(content)
+    print(f"[OK] Patched {utils_file}")
+else:
+    print(f"[WARN] Pattern not found in {utils_file}", file=sys.stderr)
+    sys.exit(1)
+
 print("All patches applied successfully.")
