@@ -2,9 +2,10 @@ import sys
 
 config_file = "/usr/local/lib/python3.12/dist-packages/vllm/transformers_utils/config.py"
 model_file = "/usr/local/lib/python3.12/dist-packages/vllm/config/model.py"
+tokenizer_file = "/usr/local/lib/python3.12/dist-packages/vllm/transformers_utils/tokenizer.py"
 
 # Patch 1: transformers_utils/config.py
-# Replace the hard raise with a safe default for unknown rope_scaling formats (e.g. Gemma 4)
+# Default rope_type to "default" instead of raising for unknown formats (Gemma 4)
 with open(config_file) as f:
     content = f.read()
 
@@ -41,6 +42,29 @@ if old2 in content:
     print(f"[OK] Patched {model_file}")
 else:
     print(f"[WARN] Pattern not found in {model_file}", file=sys.stderr)
+    sys.exit(1)
+
+# Patch 3: transformers_utils/tokenizer.py
+# Handle missing all_special_tokens_extended attribute (removed in newer transformers)
+with open(tokenizer_file) as f:
+    content = f.read()
+
+old3 = (
+    '    tokenizer_all_special_tokens_extended = (\n'
+    '        tokenizer.all_special_tokens_extended)'
+)
+new3 = (
+    '    tokenizer_all_special_tokens_extended = (\n'
+    '        getattr(tokenizer, "all_special_tokens_extended", tokenizer.all_special_tokens))'
+)
+
+if old3 in content:
+    content = content.replace(old3, new3)
+    with open(tokenizer_file, "w") as f:
+        f.write(content)
+    print(f"[OK] Patched {tokenizer_file}")
+else:
+    print(f"[WARN] Pattern not found in {tokenizer_file}", file=sys.stderr)
     sys.exit(1)
 
 print("All patches applied successfully.")
