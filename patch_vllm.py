@@ -131,4 +131,48 @@ else:
     print(f"[WARN] Pattern not found in {utils_worker_file}", file=sys.stderr)
     sys.exit(1)
 
+# Patch 6: transformers/models/gemma4/modeling_gemma4.py
+# Replace catastrophically memory-intensive reverse embedding lookup
+# (creates (batch, seq, 262144, 2560) tensor → OOM) with a zero fallback
+# when input_ids is None (as vLLM passes for multimodal inputs)
+gemma4_file = "/usr/local/lib/python3.12/dist-packages/transformers/models/gemma4/modeling_gemma4.py"
+
+with open(gemma4_file) as f:
+    content = f.read()
+
+old6 = (
+    '        if input_ids is None:\n'
+    '            with torch.no_grad():\n'
+    '                input_ids = (\n'
+    '                    (\n'
+    '                        inputs_embeds[:, :, None, :]\n'
+    '                        == self.embed_tokens.weight[None, None, :, :] * self.config.hidden_size**0.5\n'
+    '                    )\n'
+    '                    .all(dim=3)\n'
+    '                    .nonzero()[:, 2]\n'
+    '                )\n'
+    '                try:\n'
+    '                    input_ids = input_ids.view(inputs_embeds.shape[:2])\n'
+    '                except RuntimeError:\n'
+    '                    raise RuntimeError(\n'
+    '                        "It seems like you tried to call `forward` from `inputs_embeds` without providing `input_ids`, and that "\n'
+    '                        "the `inputs_embeds` you provided do not exactly match the embedding weights. Since Gemma4 needs to reverse "\n'
+    '                        "the embedding to compute another embedding, make sure you provide exact `inputs_embeds`"\n'
+    '                    )'
+)
+new6 = (
+    '        if input_ids is None:\n'
+    '            # patched: avoid OOM from reverse embedding lookup (vLLM multimodal compat)\n'
+    '            input_ids = torch.zeros(inputs_embeds.shape[:2], dtype=torch.long, device=inputs_embeds.device)'
+)
+
+if old6 in content:
+    content = content.replace(old6, new6)
+    with open(gemma4_file, "w") as f:
+        f.write(content)
+    print(f"[OK] Patched {gemma4_file}")
+else:
+    print(f"[WARN] Pattern not found in {gemma4_file}", file=sys.stderr)
+    sys.exit(1)
+
 print("All patches applied successfully.")
