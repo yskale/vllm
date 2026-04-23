@@ -162,13 +162,24 @@ old6 = (
 )
 new6 = (
     '        if input_ids is None:\n'
-    '            # patched: return None so project_per_layer_inputs() uses context-only PLE.\n'
-    '            # When vLLM v1 pre-computes inputs_embeds and passes input_ids=None, there is no\n'
-    '            # reliable way to reverse-embed back to token IDs (262144-vocab hubness problem).\n'
-    '            # project_per_layer_inputs(inputs_embeds, None) is the explicitly supported fallback\n'
-    '            # for multimodal inputs where input_ids are unavailable — uses only the context\n'
-    '            # projection from inputs_embeds, skipping the token-identity embedding lookup.\n'
-    '            return None'
+    '            # patched: recover input_ids saved by gpu_model_runner before it cleared them.\n'
+    '            # vLLM v1 pre-computes inputs_embeds from input_ids (gpu_model_runner.py), then\n'
+    '            # sets input_ids=None before calling the model.  We save them in a module-level\n'
+    '            # buffer (_LAST_INPUT_IDS_FOR_PLE) via Patch 7 below so PLE can use the real IDs.\n'
+    '            # Fallback to None (context-only PLE) if the buffer is absent.\n'
+    '            try:\n'
+    '                import vllm.v1.worker.gpu_model_runner as _gmr_mod\n'
+    '                saved = getattr(_gmr_mod, "_LAST_INPUT_IDS_FOR_PLE", None)\n'
+    '            except Exception:\n'
+    '                saved = None\n'
+    '            if saved is not None:\n'
+    '                input_ids = saved.unsqueeze(0) if saved.dim() == 1 else saved\n'
+    '                # Pad to match inputs_embeds seq length (non-zero only when DP adds padding)\n'
+    '                if inputs_embeds is not None and input_ids.shape[-1] < inputs_embeds.shape[-2]:\n'
+    '                    pad_len = inputs_embeds.shape[-2] - input_ids.shape[-1]\n'
+    '                    input_ids = torch.nn.functional.pad(input_ids, (0, pad_len), value=0)\n'
+    '            else:\n'
+    '                return None  # context-only PLE fallback'
 )
 
 if old6 in content:
@@ -178,6 +189,37 @@ if old6 in content:
     print(f"[OK] Patched {gemma4_file}")
 else:
     print(f"[WARN] Pattern not found in {gemma4_file}", file=sys.stderr)
+    sys.exit(1)
+
+# Patch 7: v1/worker/gpu_model_runner.py
+# Save original input_ids to a module-level buffer BEFORE clearing them.
+# Gemma4's get_per_layer_inputs reads this buffer when input_ids=None (Patch 6 above).
+gpu_runner_file = "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu_model_runner.py"
+
+with open(gpu_runner_file) as f:
+    content = f.read()
+
+old7 = (
+    '            input_ids = None\n'
+    '            inputs_embeds = self.inputs_embeds.gpu[:num_input_tokens]\n'
+    '            model_kwargs = {'
+)
+new7 = (
+    '            # patched: save input_ids for Gemma4 PLE before clearing (Patch 7 / Patch 6)\n'
+    '            import vllm.v1.worker.gpu_model_runner as _gmr_self_mod\n'
+    '            _gmr_self_mod._LAST_INPUT_IDS_FOR_PLE = self.input_ids.gpu[:num_scheduled_tokens].clone()\n'
+    '            input_ids = None\n'
+    '            inputs_embeds = self.inputs_embeds.gpu[:num_input_tokens]\n'
+    '            model_kwargs = {'
+)
+
+if old7 in content:
+    content = content.replace(old7, new7)
+    with open(gpu_runner_file, "w") as f:
+        f.write(content)
+    print(f"[OK] Patched {gpu_runner_file}")
+else:
+    print(f"[WARN] Pattern not found in {gpu_runner_file}", file=sys.stderr)
     sys.exit(1)
 
 print("All patches applied successfully.")
