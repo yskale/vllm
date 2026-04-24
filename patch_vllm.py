@@ -222,4 +222,68 @@ else:
     print(f"[WARN] Pattern not found in {gpu_runner_file}", file=sys.stderr)
     sys.exit(1)
 
+# Patch 8: transformers/models/gemma4/modeling_gemma4.py
+# Scale inputs_embeds by sqrt(hidden_size) when they come from VocabParallelEmbedding.
+# Gemma4's own embed_tokens (Gemma4TextScaledWordEmbedding) applies embed_scale=sqrt(hidden_size),
+# but vLLM replaces embed_tokens with VocabParallelEmbedding which does NOT scale.
+# When inputs_embeds are passed in (vLLM v1 path), they are ~50x too small → garbage output.
+with open(gemma4_file) as f:
+    content = f.read()
+
+old8 = (
+    '        if input_ids is not None:\n'
+    '            inputs_embeds = self.embed_tokens(input_ids)\n'
+    '\n'
+    '        if self.hidden_size_per_layer_input:'
+)
+new8 = (
+    '        if input_ids is not None:\n'
+    '            inputs_embeds = self.embed_tokens(input_ids)\n'
+    '        else:  # patched: scale inputs_embeds from VocabParallelEmbedding (lacks Gemma4 embed_scale)\n'
+    '            import math as _math\n'
+    '            inputs_embeds = inputs_embeds * _math.sqrt(self.config.hidden_size)\n'
+    '\n'
+    '        if self.hidden_size_per_layer_input:'
+)
+
+if old8 in content:
+    content = content.replace(old8, new8)
+    with open(gemma4_file, "w") as f:
+        f.write(content)
+    print(f"[OK] Patched {gemma4_file} (embed_scale)")
+else:
+    print(f"[WARN] Pattern not found in {gemma4_file} (embed_scale)", file=sys.stderr)
+    sys.exit(1)
+
+# Patch 9: vllm/model_executor/models/transformers.py
+# Fix create_attention_instances to use text_config.layer_types instead of config.layer_types.
+# For Gemma4, layer_types and sliding_window live on text_config (not the outer Gemma4Config).
+# Without this fix, all 42 layers get per_layer_sliding_window=None (full attention) instead
+# of the correct sliding_attention for layers that have sliding_window=512.
+transformers_file = "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/transformers.py"
+
+with open(transformers_file) as f:
+    content = f.read()
+
+old9 = (
+    '            if (hasattr(self.config, "layer_types")\n'
+    '                    and self.config.layer_types[i] == "sliding_attention"):\n'
+    '                per_layer_sliding_window = self.config.sliding_window'
+)
+new9 = (
+    '            _layer_cfg = getattr(self, "text_config", self.config)  # patched: Gemma4 layer_types/sliding_window on text_config\n'
+    '            if (hasattr(_layer_cfg, "layer_types")\n'
+    '                    and _layer_cfg.layer_types[i] == "sliding_attention"):\n'
+    '                per_layer_sliding_window = _layer_cfg.sliding_window'
+)
+
+if old9 in content:
+    content = content.replace(old9, new9)
+    with open(transformers_file, "w") as f:
+        f.write(content)
+    print(f"[OK] Patched {transformers_file} (sliding_window via text_config)")
+else:
+    print(f"[WARN] Pattern not found in {transformers_file} (sliding_window)", file=sys.stderr)
+    sys.exit(1)
+
 print("All patches applied successfully.")
